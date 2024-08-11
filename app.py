@@ -1,6 +1,6 @@
 import streamlit as st
 import fitz  # PyMuPDF
-from pdf2image import convert_from_path
+from pdf2image import convert_from_bytes
 import pytesseract
 from PIL import Image
 import os
@@ -12,6 +12,7 @@ os.environ["GEMINI_API_KEY"] = "AIzaSyDI2DelJZlGyXEPG3_b-Szo-ixRvaB0ydY"
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 # Uploading multiple PDF files
+st.title("Digital Invoicer V-1.1")
 st.markdown("**Upload the Invoice PDFs**")
 uploaded_pdfs = st.file_uploader("", type="pdf", accept_multiple_files=True)
 
@@ -34,7 +35,7 @@ if uploaded_pdfs and uploaded_excel:
         return text_data
 
     def convert_pdf_to_images_and_ocr(pdf_stream):
-        images = convert_from_path(pdf_stream)
+        images = convert_from_bytes(pdf_stream.read())
         ocr_results = [pytesseract.image_to_string(image) for image in images]
         return ocr_results
 
@@ -125,4 +126,3 @@ if uploaded_pdfs and uploaded_excel:
     # Save the updated Excel file
     workbook.save(uploaded_excel.name)
     st.write("Excel file has been updated.")
-
