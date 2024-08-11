@@ -1,5 +1,5 @@
 import fitz  # PyMuPDF
-from pdf2image import convert_from_path
+from pdf2image import convert_from_bytes
 import pytesseract
 from PIL import Image
 from openpyxl import load_workbook
@@ -47,7 +47,7 @@ if pdf_files and excel_file:
 
     def convert_pdf_to_images_and_ocr(pdf_stream):
         pdf_stream.seek(0)
-        images = convert_from_path(pdf_stream)
+        images = convert_from_bytes(pdf_stream.read())  # Use convert_from_bytes
         ocr_results = [pytesseract.image_to_string(image) for image in images]
         return ocr_results
 
@@ -139,3 +139,4 @@ if pdf_files and excel_file:
             file_name="updated_excel.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
