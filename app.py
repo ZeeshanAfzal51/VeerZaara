@@ -1,29 +1,40 @@
-import streamlit as st
 import fitz  # PyMuPDF
 from pdf2image import convert_from_bytes
 import pytesseract
 from PIL import Image
-import os
 from openpyxl import load_workbook
 import google.generativeai as genai
+import streamlit as st
+import os
+import pandas as pd
 
-# Set up Google Generative AI client
+# Set the API key for Google Generative AI
 os.environ["GEMINI_API_KEY"] = "AIzaSyDI2DelJZlGyXEPG3_b-Szo-ixRvaB0ydY"
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
-# Uploading multiple PDF files
-st.title("Digital Invoicer V-1.1")
+# Title
+st.title("Invoice PDF Processor")
+
+# File Upload: Invoice PDFs
 st.markdown("**Upload the Invoice PDFs**")
-uploaded_pdfs = st.file_uploader("", type="pdf", accept_multiple_files=True)
+pdf_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
 
-# Snippet to attach local Excel file
+# File Upload: Local Master Excel File
 st.markdown("**Upload the Local Master Excel File**")
-uploaded_excel = st.file_uploader("", type="xlsx")
+excel_file = st.file_uploader("Choose Excel file", type="xlsx")
 
-if uploaded_pdfs and uploaded_excel:
-    # Loading the workbook and selecting the active sheet
-    workbook = load_workbook(uploaded_excel)
+if pdf_files and excel_file:
+    # Load the workbook and select the active sheet
+    workbook = load_workbook(excel_file)
     worksheet = workbook.active
+
+    # Define the prompt
+    prompt = ("the following is OCR extracted text from a single invoice PDF. "
+              "Please use the OCR extracted text to give a structured summary. "
+              "The structured summary should consider information such as PO Number, Invoice Number, Invoice Amount, Invoice Date, "
+              "CGST Amount, SGST Amount, IGST Amount, Total Tax Amount, Taxable Amount, TCS Amount, IRN Number, Receiver GSTIN, "
+              "Receiver Name, Vendor GSTIN, Vendor Name, Remarks, and Vendor Code. If any of this information is not available or present, "
+              "then NA must be denoted next to the value. Please do not give any additional information.")
 
     def extract_text_from_pdf(pdf_stream):
         doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
@@ -35,7 +46,8 @@ if uploaded_pdfs and uploaded_excel:
         return text_data
 
     def convert_pdf_to_images_and_ocr(pdf_stream):
-        images = convert_from_bytes(pdf_stream.read())
+        pdf_stream.seek(0)
+        images = convert_from_bytes(pdf_stream.read())  # Use convert_from_bytes
         ocr_results = [pytesseract.image_to_string(image) for image in images]
         return ocr_results
 
@@ -47,9 +59,6 @@ if uploaded_pdfs and uploaded_excel:
         return combined_text
 
     def extract_parameters_from_response(response_text):
-        def sanitize_value(value):
-            return value.strip().replace('"', '').replace(',', '')
-
         parameters = {
             "PO Number": "NA",
             "Invoice Number": "NA",
@@ -73,56 +82,61 @@ if uploaded_pdfs and uploaded_excel:
         for line in lines:
             for key in parameters.keys():
                 if key in line:
-                    value = sanitize_value(line.split(":")[-1].strip())
+                    value = line.split(":")[-1].strip()
                     parameters[key] = value
         return parameters
 
-    # The prompt to send
-    prompt = (
-        "The following is OCR extracted text from a single invoice PDF. "
-        "Please use the OCR extracted text to give a structured summary. "
-        "The structured summary should consider information such as PO Number, Invoice Number, Invoice Amount, Invoice Date, "
-        "CGST Amount, SGST Amount, IGST Amount, Total Tax Amount, Taxable Amount, TCS Amount, IRN Number, Receiver GSTIN, "
-        "Receiver Name, Vendor GSTIN, Vendor Name, Remarks, and Vendor Code. If any of this information is not available or present, "
-        "then NA must be denoted next to the value. Please do not give any additional information."
-    )
-
-    success_messages = []
-    structured_summaries = []
-
-    # Process each PDF and send data to Excel
-    for pdf_file in uploaded_pdfs:
-        pdf_name = pdf_file.name
+    for pdf_file in pdf_files:
         text_data = extract_text_from_pdf(pdf_file)
         ocr_results = convert_pdf_to_images_and_ocr(pdf_file)
         combined_text = combine_text_and_ocr_results(text_data, ocr_results)
-
+        
+        # Combine the prompt and the extracted text
         input_text = f"{prompt}\n\n{combined_text}"
 
-        # Generate the response using Google Generative AI
-        response = genai.generate(input_text)
+        # Creating the model configuration
+        generation_config = {
+            "temperature": 1,
+            "top_p": 0.95,
+            "top_k": 64,
+            "max_output_tokens": 8192,
+            "response_mime_type": "text/plain",
+        }
+
+        # Initializing the model
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            generation_config=generation_config,
+        )
+
+        # Starting a chat session
+        chat_session = model.start_chat(
+            history=[]
+        )
+
+        # Send the combined text as a message
+        response = chat_session.send_message(input_text)
+
+        # Extract the relevant data from the response
         parameters = extract_parameters_from_response(response.text)
 
         # Add data to the Excel file
         row_data = [parameters[key] for key in parameters.keys()]
         worksheet.append(row_data)
 
-        # Collect success message
-        success_messages.append(f"Data from {pdf_name} has been successfully added to the Excel file")
+        # Display confirmation and structured summary
+        st.markdown(f"**Data from {pdf_file.name} has been successfully added to the Excel file**")
 
-        # Collect structured summary
-        structured_summaries.append((pdf_name, parameters))
+        summary_df = pd.DataFrame(parameters.items(), columns=["Parameter", "Value"])
+        st.table(summary_df)
 
-    # Display all success messages
-    for message in success_messages:
-        st.write(message)
+    # Save the updated Excel file and provide download link
+    workbook.save("updated_excel.xlsx")
+    with open("updated_excel.xlsx", "rb") as file:
+        st.download_button(
+            label="Download Updated Excel File",
+            data=file,
+            file_name="updated_excel.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-    # Print the structured summaries after processing all PDFs
-    st.write("### Structured Summaries")
-    for pdf_name, parameters in structured_summaries:
-        st.markdown(f"**{pdf_name} Structured Summary:**")
-        st.table(parameters)
-
-    # Save the updated Excel file
-    workbook.save(uploaded_excel.name)
-    st.write("Excel file has been updated.")
